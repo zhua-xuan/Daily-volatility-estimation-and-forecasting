@@ -1,28 +1,33 @@
 import pandas as pd
-import holidays
 
+# Define file paths
+file_paths = [
+    r"C:\Users\1000r\Downloads\jcsxmx3m3e0ra7cn.csv",
+    r"C:\Users\1000r\Downloads\kh8sdgd9xtvxw6sx.csv",
+    r"C:\Users\1000r\Downloads\nrtzjrt9ixhsbffu.csv"
+]
 
 def data_read(file_path) -> pd.DataFrame:
     df = pd.read_csv(file_path)
     df = df[df['SYM_ROOT'] == 'CSCO']
-    df = df[['DATE', 'TIME_M', 'PRICE', 'EX','TR_SCOND']]
-    return df
+    return df[['DATE', 'TIME_M', 'PRICE', 'EX', 'TR_CORR', 'TR_SCOND']]
 
-def remove_duplicates(data: pd.DataFrame) -> pd.DataFrame:    
+def remove_duplicates(data: pd.DataFrame) -> pd.DataFrame:
     return data.drop_duplicates()
 
-def remove_out_of_range_values(data: pd.DataFrame) -> pd.DataFrame:    
-    return data[(data['PRICE'] > 0)]
+def remove_out_of_range_values(data: pd.DataFrame) -> pd.DataFrame:
+    return data[data['PRICE'] > 0]
 
 def handle_missing_values(data: pd.DataFrame) -> pd.DataFrame:
     required_columns = ['PRICE', 'DATE', 'TIME_M']
-    return data.dropna(subset=required_columns)
+    data = data.dropna(subset=required_columns)
+    return data
 
-def filter_hours(data: pd.DataFrame, start_time: str = '09:30:00', end_time: str = '16:00:00') -> pd.DataFrame:    
+def filter_hours(data: pd.DataFrame, start_time: str = '09:30:00', end_time: str = '16:00:00') -> pd.DataFrame:
     data['DATETIME'] = pd.to_datetime(data['DATE'] + ' ' + data['TIME_M'])
     data = data.set_index('DATETIME')
-    filtered_data = data.between_time(start_time, end_time).reset_index(drop = True)
-    return filtered_data
+    data = data.between_time(start_time, end_time).reset_index(drop=False)
+    return data
 
 def filter_corrected_trades(data: pd.DataFrame) -> pd.DataFrame:
     return data[data['TR_CORR'] == 0]
@@ -35,10 +40,10 @@ def filter_sale_conditions(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 def handle_duplicate_timestamps(data: pd.DataFrame) -> pd.DataFrame:
-    data['DATETIME'] = pd.to_datetime(data['DATE'] + ' ' + data['TIME_M'])
     return data.groupby('DATETIME', as_index=False).agg({
         'PRICE': 'median',
         'EX': 'first',
+        'TR_CORR': 'first',
         'TR_SCOND': 'first',
         'DATE': 'first'
     })
@@ -50,42 +55,41 @@ def filter_most_frequent_exchange(data: pd.DataFrame, frequency: str = 'M'):
     most_frequent_exchanges = exchange_counts.loc[exchange_counts.groupby('period')['count'].idxmax()]
     data = pd.merge(data, most_frequent_exchanges, on='period', suffixes=('', '_y'))
     data = data[data['EX'] == data['EX_y']].drop(columns=['EX_y', 'count', 'period'])
-    #exchange_list = most_frequent_exchanges[['period', 'EX']].values.tolist()
-    return data
+    exchange_list = most_frequent_exchanges[['period', 'EX']].values.tolist()
+    return data, exchange_list
 
-def data_cleaning(data: pd.DataFrame) -> pd.DataFrame:
-    cleaned_data = data.copy()
-    cleaned_data = filter_hours(cleaned_data)
-    cleaned_data = remove_duplicates(cleaned_data)
-    cleaned_data = handle_missing_values(cleaned_data)
-    cleaned_data = remove_out_of_range_values(cleaned_data)
-    cleaned_data = filter_sale_conditions(cleaned_data)
-    cleaned_data = handle_duplicate_timestamps(cleaned_data)
-    cleaned_data = filter_most_frequent_exchange(cleaned_data)
-    return cleaned_data
+def data_cleaning(data: pd.DataFrame):
+    data = filter_hours(data)
+    data = handle_missing_values(data)
+    data = remove_out_of_range_values(data)
+    data = filter_corrected_trades(data)
+    data = filter_sale_conditions(data)
+    data = handle_duplicate_timestamps(data)
+    data, exchange_list = filter_most_frequent_exchange(data)
+    return data, exchange_list
 
 def data_concat(file_paths: list) -> pd.DataFrame:
-    dfs = [pd.read_csv(file_path) for file_path in file_paths]
-    merged_df = pd.concat(dfs, ignore_index=True)
-    return merged_df
+    dfs = [data_read(file_path) for file_path in file_paths]
+    all_data = pd.concat(dfs, ignore_index=True)
+    if all_data.empty or 'DATE' not in all_data.columns:
+        raise ValueError("'DATE' column is missing or all data is empty after concatenation.")
+    return all_data
 
 def resample(data: pd.DataFrame) -> pd.DataFrame:
     data.set_index('DATETIME', inplace=True)
-    data.index = pd.to_datetime(data.index)
-    resampled_data = data['PRICE'].resample('1s').mean().reset_index()
-    #resampled_data = resampled_data.sort_values(by='DATETIME').reset_index(drop=True)
+    resampled_data = data['PRICE'].resample('1S').ffill().reset_index()
+    resampled_data = resampled_data.sort_values(by='DATETIME').reset_index(drop=True)
     return resampled_data
 
-def filter_hour_after(data: pd.DataFrame, start_time: str = '09:30:00', end_time: str = '16:00:00') -> pd.DataFrame:    
-    data.set_index('DATETIME', inplace=True)
-    filtered_data = data.between_time(start_time, end_time)
-    return filtered_data
+# Process all data
+all_data = data_concat(file_paths)
+cleaned_data, exchange_list = data_cleaning(all_data)
+resampled_data = resample(cleaned_data)
 
-def filter_date(df):
-    df = pd.read_csv('data/new/1s_data_in.csv') 
-    df['DATETIME'] = pd.to_datetime(df['DATETIME'])
+# Save the final dataset
+output_path = r"C:\Users\1000r\Downloads\final_resampled_data2.csv"
+resampled_data.to_csv(output_path, index=False)
 
-    df = df[~df['DATETIME'].dt.weekday.isin([5, 6])]
 
-    us_holidays = holidays.US()
-    df = df[~df['DATETIME'].dt.date.isin(us_holidays)]
+
+
